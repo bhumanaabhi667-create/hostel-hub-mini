@@ -19,8 +19,8 @@ const initialComplaints: Complaint[] = [
 const nav = [{ name: "Overview", icon: LayoutDashboard }, { name: "Students", icon: Users }, { name: "Hostels & rooms", icon: Building2 }, { name: "Fee payments", icon: CreditCard }, { name: "Complaints", icon: ClipboardList }];
 
 export default function Index() {
-  const [students, setStudents] = useState(() => JSON.parse(localStorage.getItem("hostel-students") || "null") || initialStudents);
-  const [complaints, setComplaints] = useState<Complaint[]>(() => JSON.parse(localStorage.getItem("hostel-complaints") || "null") || initialComplaints);
+  const [students, setStudents] = useState<Student[]>(initialStudents);
+  const [complaints, setComplaints] = useState<Complaint[]>(initialComplaints);
   const [active, setActive] = useState("Overview");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All students");
