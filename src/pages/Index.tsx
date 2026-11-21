@@ -1,26 +1,19 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Bell, Building2, Check, ChevronDown, CircleHelp, ClipboardList, CreditCard, DoorOpen, Download, Home, LayoutDashboard, Menu, Plus, Search, Settings, ShieldCheck, Users, Wifi, Wrench, X } from "lucide-react";
+import AuthPage from "@/components/auth-page";
+import { apiRequest } from "@/lib/api";
+import { authClient } from "@/lib/auth-client";
 
 type Student = { id: string; name: string; initials: string; department: string; room: string; hostel: string; gender: string; contact: string; fee: string; status: string };
 type Complaint = { id: string; name: string; room: string; category: string; description: string; date: string; status: "Open" | "Resolved" };
-const initialStudents: Student[] = [
-  { id: "STU-2401", name: "Aarav Mehta", initials: "AM", department: "Computer Science", room: "A-204", hostel: "Maple Hall", gender: "Boys", contact: "+1 (555) 012-4490", fee: "Paid", status: "Active" },
-  { id: "STU-2402", name: "Priya Sharma", initials: "PS", department: "Biotechnology", room: "C-108", hostel: "Cedar House", gender: "Girls", contact: "+1 (555) 017-2281", fee: "Due", status: "Active" },
-  { id: "STU-2403", name: "Noah Williams", initials: "NW", department: "Mechanical Eng.", room: "A-312", hostel: "Maple Hall", gender: "Boys", contact: "+1 (555) 013-7712", fee: "Paid", status: "Active" },
-  { id: "STU-2404", name: "Ananya Patel", initials: "AP", department: "Economics", room: "D-207", hostel: "Willow Residence", gender: "Girls", contact: "+1 (555) 018-0944", fee: "Due", status: "Active" },
-  { id: "STU-2405", name: "Ethan Chen", initials: "EC", department: "Electrical Eng.", room: "B-116", hostel: "Pine Lodge", gender: "Boys", contact: "+1 (555) 016-5320", fee: "Paid", status: "Active" },
-  { id: "STU-2406", name: "Maya Johnson", initials: "MJ", department: "Design & Media", room: "C-212", hostel: "Cedar House", gender: "Girls", contact: "+1 (555) 011-9023", fee: "Paid", status: "Active" },
-];
-const initialComplaints: Complaint[] = [
-  { id: "CMP-108", name: "Priya Sharma", room: "C-108", category: "Plumbing", description: "Shower tap leaking continuously", date: "Today, 9:42 AM", status: "Open" },
-  { id: "CMP-107", name: "Ethan Chen", room: "B-116", category: "Wi-Fi", description: "Unstable connection on second floor", date: "Today, 8:15 AM", status: "Open" },
-  { id: "CMP-105", name: "Noah Williams", room: "A-312", category: "Electrical", description: "Desk lamp outlet not working", date: "Yesterday", status: "Resolved" },
-];
 const nav = [{ name: "Overview", icon: LayoutDashboard }, { name: "Students", icon: Users }, { name: "Hostels & rooms", icon: Building2 }, { name: "Fee payments", icon: CreditCard }, { name: "Complaints", icon: ClipboardList }];
 
 export default function Index() {
-  const [students, setStudents] = useState(() => JSON.parse(localStorage.getItem("hostel-students") || "null") || initialStudents);
-  const [complaints, setComplaints] = useState<Complaint[]>(() => JSON.parse(localStorage.getItem("hostel-complaints") || "null") || initialComplaints);
+  const [user, setUser] = useState<{ id: string; name: string; email: string } | null>(null);
+  const [authPending, setAuthPending] = useState(true);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [complaints, setComplaints] = useState<Complaint[]>([]);
+  const [dataLoading, setDataLoading] = useState(true);
   const [active, setActive] = useState("Overview");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All students");
@@ -30,32 +23,120 @@ export default function Index() {
   const [form, setForm] = useState({ name: "", department: "", room: "", hostel: "Maple Hall", gender: "Boys", contact: "" });
   const [issue, setIssue] = useState({ student: "", category: "Electrical", description: "" });
   const [period, setPeriod] = useState("Fall 2026");
+  const notify = useCallback((message: string) => { setNotice(message); window.setTimeout(() => setNotice(""), 2600); }, []);
+  useEffect(() => {
+    let active = true;
+    authClient.getSession()
+      .then(({ data, error }) => {
+        if (error) throw new Error(error.message ?? "Unable to check your session.");
+        if (!active) return;
+        const currentUser = data?.session && data.user ? data.user : null;
+        setUser(currentUser ? { id: currentUser.id, name: currentUser.name, email: currentUser.email } : null);
+      })
+      .catch(error => {
+        if (active) {
+          setUser(null);
+          notify(error instanceof Error ? error.message : "Unable to check your session.");
+        }
+      })
+      .finally(() => { if (active) setAuthPending(false); });
+    return () => { active = false; };
+  }, [notify]);
+  useEffect(() => {
+    if (!user?.id) return;
+    let active = true;
+    setDataLoading(true);
+    apiRequest<{ students: Student[]; complaints: Complaint[] }>("/api/data")
+      .then(data => {
+        if (active) {
+          setStudents(data.students);
+          setComplaints(data.complaints.map(c => ({ ...c, date: new Date(c.date).toLocaleString() })));
+        }
+      })
+      .catch(error => {
+        if (active) notify(error instanceof Error ? error.message : "Unable to load dashboard data.");
+      })
+      .finally(() => { if (active) setDataLoading(false); });
+    return () => { active = false; };
+  }, [user?.id, notify]);
   const visibleStudents = useMemo(() => students.filter((s: Student) => `${s.name} ${s.id} ${s.room} ${s.department}`.toLowerCase().includes(search.toLowerCase()) && (filter === "All students" || (filter === "Fees due" ? s.fee === "Due" : s.hostel === filter))), [students, search, filter]);
-  const notify = (message: string) => { setNotice(message); window.setTimeout(() => setNotice(""), 2600); };
-  const changeComplaint = (id: string) => { const next = complaints.map(c => c.id === id ? { ...c, status: c.status === "Open" ? "Resolved" as const : "Open" as const } : c); setComplaints(next); localStorage.setItem("hostel-complaints", JSON.stringify(next)); };
-  const addStudent = (e: React.FormEvent) => { e.preventDefault(); if (!form.name.trim() || !form.room.trim()) return; const name = form.name.trim(); const next = [{ id: `STU-${Math.floor(2407 + Math.random() * 1000)}`, name, initials: name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(), department: form.department || "Undeclared", room: form.room.toUpperCase(), hostel: form.hostel, gender: form.gender, contact: form.contact || "—", fee: "Due", status: "Active" }, ...students]; setStudents(next); localStorage.setItem("hostel-students", JSON.stringify(next)); setModal(""); setForm({ name: "", department: "", room: "", hostel: "Maple Hall", gender: "Boys", contact: "" }); notify("Student and room allocation added"); };
-  const addComplaint = (e: React.FormEvent) => { e.preventDefault(); if (!issue.student || !issue.description.trim()) return; const student = students.find((s: Student) => s.id === issue.student); const next = [{ id: `CMP-${Math.floor(109 + Math.random() * 900)}`, name: student?.name || "Student", room: student?.room || "—", category: issue.category, description: issue.description.trim(), date: "Just now", status: "Open" as const }, ...complaints]; setComplaints(next); localStorage.setItem("hostel-complaints", JSON.stringify(next)); setModal(""); setIssue({ student: "", category: "Electrical", description: "" }); setActive("Complaints"); notify("Complaint submitted successfully"); };
+  const changeComplaint = async (id: string) => {
+    const complaint = complaints.find(item => item.id === id);
+    if (!complaint) return;
+    const status = complaint.status === "Open" ? "Resolved" : "Open";
+    try {
+      await apiRequest("/api/data", { method: "PATCH", body: JSON.stringify({ type: "complaint", id, status }) });
+      setComplaints(current => current.map(item => item.id === id ? { ...item, status } : item));
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to update complaint.");
+    }
+  };
+  const addStudent = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const student = await apiRequest<Student>("/api/data", {
+        method: "POST",
+        body: JSON.stringify({ type: "student", ...form }),
+      });
+      setStudents(current => [student, ...current]);
+      setModal("");
+      setForm({ name: "", department: "", room: "", hostel: "Maple Hall", gender: "Boys", contact: "" });
+      notify("Student and room allocation added");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to add student.");
+    }
+  };
+  const addComplaint = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const student = students.find(item => item.id === issue.student);
+    if (!student) return;
+    try {
+      const saved = await apiRequest<Complaint>("/api/data", {
+        method: "POST",
+        body: JSON.stringify({ type: "complaint", studentId: student.id, category: issue.category, description: issue.description }),
+      });
+      setComplaints(current => [{ ...saved, date: new Date(saved.date).toLocaleString() }, ...current]);
+      setModal("");
+      setIssue({ student: "", category: "Electrical", description: "" });
+      setActive("Complaints");
+      notify("Complaint submitted successfully");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to submit complaint.");
+    }
+  };
+  const signOut = async () => {
+    try {
+      const { error } = await authClient.signOut();
+      if (error) throw new Error(error.message ?? "Unable to sign out.");
+      setUser(null);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Unable to sign out.");
+    }
+  };
   const exportData = () => { const csv = ["Student ID,Name,Department,Room,Hostel,Gender,Emergency Contact,Fee Status", ...students.map((s: Student) => [s.id,s.name,s.department,s.room,s.hostel,s.gender,s.contact,s.fee].map(x => `"${x}"`).join(","))].join("\n"); const url = URL.createObjectURL(new Blob([csv], { type: "text/csv" })); const a = document.createElement("a"); a.href = url; a.download = "hostel-students.csv"; a.click(); URL.revokeObjectURL(url); };
   const hostels = [{ name: "Maple Hall", gender: "Boys hostel", occupied: 142, total: 160, color: "bg-[#477b66]", icon: "M" }, { name: "Cedar House", gender: "Girls hostel", occupied: 118, total: 140, color: "bg-[#c18466]", icon: "C" }, { name: "Pine Lodge", gender: "Boys hostel", occupied: 96, total: 120, color: "bg-[#657e9b]", icon: "P" }, { name: "Willow Residence", gender: "Girls hostel", occupied: 84, total: 100, color: "bg-[#a48b63]", icon: "W" }];
+  if (authPending) return <main className="grid min-h-screen place-items-center bg-[#f7f8f5] text-sm text-[#77837a]">Checking your session...</main>;
+  if (!user) return <AuthPage />;
+  if (dataLoading) return <main className="grid min-h-screen place-items-center bg-[#f7f8f5] text-sm text-[#77837a]">Loading your residence data...</main>;
   return <div className="min-h-screen bg-[#f7f8f5] text-[#26372f]" style={{ fontFamily: "'DM Sans', sans-serif" }}>
     <aside className={`fixed inset-y-0 left-0 z-40 flex w-[250px] flex-col bg-[#19392f] px-5 py-6 text-white transition-transform lg:translate-x-0 ${mobileNav ? "translate-x-0" : "-translate-x-full"}`}>
       <div className="flex items-center gap-3 px-2"><div className="grid h-10 w-10 place-items-center rounded-[14px] bg-[#d8e6ca] text-[#244a37]"><Home size={21}/></div><div><p className="text-[15px] font-bold tracking-tight">Haven<span className="text-[#a7ca91]">.</span></p><p className="text-[10px] font-medium tracking-[.18em] text-[#afc5b5]">CAMPUS LIVING</p></div><button onClick={() => setMobileNav(false)} className="ml-auto lg:hidden"><X size={18}/></button></div>
       <p className="mb-3 mt-11 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-[#8ca99a]">Workspace</p>
       <nav className="space-y-1">{nav.map(item => <button key={item.name} onClick={() => {setActive(item.name); setMobileNav(false);}} className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[13px] font-medium transition ${active === item.name ? "bg-[#315546] text-white shadow-sm" : "text-[#b7c9bd] hover:bg-[#28483b] hover:text-white"}`}><item.icon size={17} strokeWidth={1.8}/>{item.name}{item.name === "Complaints" && <span className="ml-auto rounded-full bg-[#e7ad72] px-2 py-0.5 text-[10px] font-bold text-[#3c342b]">{complaints.filter(c => c.status === "Open").length}</span>}</button>)}</nav>
       <div className="mt-10 border-t border-white/10 pt-6"><p className="mb-3 px-3 text-[10px] font-bold uppercase tracking-[.18em] text-[#8ca99a]">Support</p><button className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-[13px] text-[#b7c9bd] hover:bg-[#28483b]"><CircleHelp size={17}/>Help center</button><button className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-[13px] text-[#b7c9bd] hover:bg-[#28483b]"><Settings size={17}/>Settings</button></div>
-      <div className="mt-auto rounded-2xl border border-white/10 bg-white/[.06] p-4"><div className="flex items-center gap-2"><div className="grid h-8 w-8 place-items-center rounded-full bg-[#b7ceb1] text-[11px] font-bold text-[#254335]">JD</div><div><p className="text-xs font-semibold">Jordan Davis</p><p className="text-[10px] text-[#a9beb0]">Residence manager</p></div><ChevronDown size={15} className="ml-auto text-[#a9beb0]"/></div></div>
+      <div className="mt-auto rounded-2xl border border-white/10 bg-white/[.06] p-4"><div className="flex items-center gap-2"><div className="grid h-8 w-8 place-items-center rounded-full bg-[#b7ceb1] text-[11px] font-bold text-[#254335]">{user.name.split(/\s+/).map(part => part[0] ?? "").join("").slice(0, 2).toUpperCase()}</div><div className="min-w-0"><p className="truncate text-xs font-semibold">{user.name}</p><p className="truncate text-[10px] text-[#a9beb0]">{user.email}</p></div><button aria-label="Sign out" onClick={() => { void signOut(); }} className="ml-auto text-[10px] text-[#d3e2d7] hover:underline">Sign out</button></div></div>
     </aside>
     {mobileNav && <button aria-label="Close menu" onClick={() => setMobileNav(false)} className="fixed inset-0 z-30 bg-black/30 lg:hidden"/>}
     <main className="min-h-screen lg:ml-[250px]">
       <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-[#e7eae3] bg-[#f7f8f5]/95 px-5 backdrop-blur-md sm:px-8"><div className="flex items-center gap-3"><button onClick={() => setMobileNav(true)} className="rounded-lg p-2 hover:bg-[#e9eee7] lg:hidden"><Menu size={19}/></button><div className="hidden items-center gap-2 text-xs text-[#87948b] sm:flex">Campus <span>/</span> <span className="font-semibold text-[#34463b]">{active}</span></div><h1 className="text-[17px] font-bold tracking-[-.03em] sm:hidden">{active}</h1></div><div className="flex items-center gap-3"><div className="hidden rounded-full border border-[#dfe5dc] bg-white px-3 py-2 text-[11px] font-medium text-[#65746a] sm:flex sm:items-center sm:gap-2"><span className="h-2 w-2 rounded-full bg-[#75a768]"/>Academic year 2026–27<ChevronDown size={13}/></div><button onClick={() => notify("You're all caught up!")} className="relative grid h-9 w-9 place-items-center rounded-full border border-[#e2e7df] bg-white text-[#526358]"><Bell size={16}/><span className="absolute right-[7px] top-[7px] h-1.5 w-1.5 rounded-full bg-[#d7865f] ring-2 ring-white"/></button><div className="grid h-9 w-9 place-items-center rounded-full bg-[#ead9c9] text-[11px] font-bold text-[#71533e]">JD</div></div></header>
-      <div className="mx-auto max-w-[1400px] px-5 pb-12 pt-7 sm:px-8 sm:pt-9"><div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="mb-2 text-[11px] font-bold uppercase tracking-[.17em] text-[#839082]">Tuesday, September 15, 2026</p><h2 className="text-[28px] font-bold leading-tight tracking-[-.045em] sm:text-[33px]">Good morning, Jordan <span className="text-[#d49369]">☀</span></h2><p className="mt-2 text-[13px] text-[#77837a]">Here’s what’s happening across your residences today.</p></div><div className="flex gap-2"><button onClick={exportData} className="flex items-center gap-2 rounded-xl border border-[#dfe5dc] bg-white px-3.5 py-2.5 text-[12px] font-semibold text-[#526358] hover:bg-[#f4f7f2]"><Download size={15}/>Export</button><button onClick={() => setModal("student")} className="flex items-center gap-2 rounded-xl bg-[#315e49] px-4 py-2.5 text-[12px] font-semibold text-white shadow-sm hover:bg-[#254d3b]"><Plus size={16}/>Add student</button></div></div>
+      <div className="mx-auto max-w-[1400px] px-5 pb-12 pt-7 sm:px-8 sm:pt-9"><div className="mb-7 flex flex-col justify-between gap-4 sm:flex-row sm:items-end"><div><p className="mb-2 text-[11px] font-bold uppercase tracking-[.17em] text-[#839082]">Your residence workspace</p><h2 className="text-[28px] font-bold leading-tight tracking-[-.045em] sm:text-[33px]">Welcome, {user.name.split(/\s+/)[0]} <span className="text-[#d49369]">☀</span></h2><p className="mt-2 text-[13px] text-[#77837a]">Here’s what’s happening across your residences today.</p></div><div className="flex gap-2"><button onClick={exportData} className="flex items-center gap-2 rounded-xl border border-[#dfe5dc] bg-white px-3.5 py-2.5 text-[12px] font-semibold text-[#526358] hover:bg-[#f4f7f2]"><Download size={15}/>Export</button><button onClick={() => setModal("student")} className="flex items-center gap-2 rounded-xl bg-[#315e49] px-4 py-2.5 text-[12px] font-semibold text-white shadow-sm hover:bg-[#254d3b]"><Plus size={16}/>Add student</button></div></div>
       {active === "Overview" && <><div className="grid grid-cols-2 gap-3 lg:grid-cols-4 lg:gap-4">{[{label:"Total residents",value:students.length.toString(),note:"Across 4 hostel blocks",icon:Users,tint:"bg-[#e7efe4] text-[#4d7658]",delta:"+8.2%"},{label:"Room occupancy",value:"88%",note:"440 of 500 beds filled",icon:DoorOpen,tint:"bg-[#f2e9dc] text-[#a57b50]",delta:"+2.4%"},{label:"Fees collected",value:"$42,680",note:"September · 92% collected",icon:CreditCard,tint:"bg-[#e5edf1] text-[#5f7f91]",delta:"+5.8%"},{label:"Open complaints",value:complaints.filter(c=>c.status==="Open").length.toString(),note:"2 need attention today",icon:Wrench,tint:"bg-[#f3e6df] text-[#b16e53]",delta:"View all"}].map((card,i)=><div key={card.label} onClick={() => i===3 && setActive("Complaints")} className={`rounded-[18px] border border-[#e8ebe5] bg-white p-4 shadow-[0_2px_8px_rgba(40,60,45,.025)] sm:p-5 ${i===3?"cursor-pointer":""}`}><div className="flex items-start justify-between"><div><p className="text-[11px] font-semibold text-[#77847a] sm:text-xs">{card.label}</p><p className="mt-3 text-[25px] font-bold tracking-[-.04em] text-[#2a3c31] sm:text-[29px]">{card.value}</p></div><div className={`grid h-9 w-9 place-items-center rounded-xl ${card.tint}`}><card.icon size={17}/></div></div><div className="mt-3 flex items-center gap-1.5"><span className="text-[10px] font-bold text-[#598258]">↗ {card.delta}</span><span className="truncate text-[10px] text-[#929b93]">{card.note}</span></div></div>)}</div>
       <div className="mt-6 grid gap-5 xl:grid-cols-[1.55fr_1fr]"><section className="rounded-[18px] border border-[#e8ebe5] bg-white p-5 sm:p-6"><div className="mb-5 flex items-center justify-between"><div><h3 className="text-[15px] font-bold tracking-tight">Hostel blocks</h3><p className="mt-1 text-[11px] text-[#859087]">Occupancy across all residences</p></div><button onClick={() => setActive("Hostels & rooms")} className="text-[11px] font-bold text-[#4c7757] hover:underline">View all blocks →</button></div><div className="grid gap-3 sm:grid-cols-2">{hostels.map(h=><div key={h.name} className="rounded-[14px] border border-[#edf0eb] p-4"><div className="flex items-center gap-3"><div className={`grid h-10 w-10 place-items-center rounded-xl ${h.color} text-sm font-bold text-white`}>{h.icon}</div><div><p className="text-[12px] font-bold">{h.name}</p><p className="mt-0.5 text-[10px] text-[#8b958d]">{h.gender}</p></div><button onClick={() => {setFilter(h.name);setActive("Students");}} className="ml-auto rounded-full px-2.5 py-1 text-[10px] font-semibold text-[#62816a] hover:bg-[#f1f5ef]">Details</button></div><div className="mt-4 flex items-center justify-between text-[10px]"><span className="text-[#7a877d]">Rooms occupied</span><span className="font-bold text-[#3b4d40]">{h.occupied} <span className="font-normal text-[#929b93]">/ {h.total} beds</span></span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[#edf0eb]"><div className="h-full rounded-full bg-[#78a078]" style={{width:`${h.occupied/h.total*100}%`}}/></div></div>)}</div><div className="mt-5 flex items-center gap-2 rounded-xl bg-[#f4f7f2] px-3.5 py-3"><ShieldCheck size={16} className="text-[#628566]"/><p className="text-[11px] text-[#67756a]">All residence blocks are <span className="font-bold text-[#456c4d]">operational</span> and safety-checked.</p><span className="ml-auto hidden text-[10px] text-[#8a988d] sm:block">Last inspection · Sep 12</span></div></section>
       <section className="rounded-[18px] border border-[#e8ebe5] bg-white p-5 sm:p-6"><div className="mb-4 flex items-center justify-between"><div><h3 className="text-[15px] font-bold tracking-tight">Recent complaints</h3><p className="mt-1 text-[11px] text-[#859087]">A quick look at resident requests</p></div><button onClick={() => setActive("Complaints")} className="text-[11px] font-bold text-[#4c7757] hover:underline">See all →</button></div><div className="space-y-1">{complaints.slice(0,4).map(c=><div key={c.id} className="flex items-start gap-3 border-b border-[#f0f2ee] py-3 last:border-0"><div className={`mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-[10px] ${c.category==="Wi-Fi"?"bg-[#e8edf4] text-[#6b7f9b]":"bg-[#f5ece5] text-[#aa7958]"}`}>{c.category==="Wi-Fi"?<Wifi size={15}/>:<Wrench size={15}/>}</div><div className="min-w-0 flex-1"><div className="flex items-center justify-between gap-2"><p className="truncate text-[11px] font-bold">{c.category} · {c.room}</p><span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-bold ${c.status==="Open"?"bg-[#fbf0e3] text-[#a36d36]":"bg-[#e8f1e8] text-[#5c815e]"}`}>{c.status}</span></div><p className="mt-1 truncate text-[10px] text-[#7c877f]">{c.description}</p><p className="mt-1 text-[9px] text-[#a0a8a0]">{c.name} · {c.date}</p></div></div>)}</div><button onClick={() => setModal("complaint")} className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-dashed border-[#dce5da] py-2.5 text-[11px] font-semibold text-[#5c7b60] hover:bg-[#f6f8f4]"><Plus size={14}/>Log a complaint</button></section></div>
-      <section className="mt-5 overflow-hidden rounded-[18px] border border-[#e8ebe5] bg-white"><div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div><h3 className="text-[15px] font-bold tracking-tight">Recent residents</h3><p className="mt-1 text-[11px] text-[#859087]">Students with active room allocations</p></div><button onClick={() => setActive("Students")} className="text-left text-[11px] font-bold text-[#4c7757] hover:underline sm:text-right">View student directory →</button></div><StudentTable students={students.slice(0,4)} onFee={id=>{const next=students.map((s:Student)=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s);setStudents(next);localStorage.setItem("hostel-students",JSON.stringify(next));notify("Fee status updated");}}/></section></>}
-      {active === "Students" && <section className="overflow-hidden rounded-[18px] border border-[#e8ebe5] bg-white"><div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div><h3 className="text-[15px] font-bold">Student directory</h3><p className="mt-1 text-[11px] text-[#859087]">{visibleStudents.length} residents · active room allocations</p></div><div className="flex flex-wrap gap-2"><div className="flex items-center gap-2 rounded-xl border border-[#e4e9e2] px-3"><Search size={14} className="text-[#8b978d]"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search residents..." className="w-36 bg-transparent py-2.5 text-[11px] outline-none sm:w-48"/></div><select value={filter} onChange={e=>setFilter(e.target.value)} className="rounded-xl border border-[#e4e9e2] bg-white px-3 text-[11px] outline-none"><option>All students</option><option>Fees due</option>{hostels.map(h=><option key={h.name}>{h.name}</option>)}</select><button onClick={exportData} className="rounded-xl border border-[#e4e9e2] p-2.5"><Download size={15}/></button></div></div><StudentTable students={visibleStudents} onFee={id=>{const next=students.map((s:Student)=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s);setStudents(next);localStorage.setItem("hostel-students",JSON.stringify(next));notify("Fee status updated");}}/></section>}
-      {active === "Hostels & rooms" && <><div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{hostels.map(h=><div key={h.name} className="rounded-[18px] border border-[#e8ebe5] bg-white p-5"><div className={`grid h-11 w-11 place-items-center rounded-[14px] ${h.color} text-sm font-bold text-white`}>{h.icon}</div><p className="mt-4 text-[14px] font-bold">{h.name}</p><p className="mt-1 text-[11px] text-[#879188]">{h.gender} · {h.total} beds</p><div className="mt-5 flex justify-between text-[11px]"><span className="text-[#78847b]">Occupied</span><b>{h.occupied} / {h.total}</b></div><div className="mt-2 h-2 rounded-full bg-[#edf0eb]"><div className="h-full rounded-full bg-[#78a078]" style={{width:`${h.occupied/h.total*100}%`}}/></div><p className="mt-3 text-[10px] font-semibold text-[#638268]">{h.total-h.occupied} beds available</p></div>)}</div><div className="rounded-[18px] border border-[#e8ebe5] bg-white p-5 sm:p-6"><h3 className="text-[15px] font-bold">Room allocation overview</h3><p className="mt-1 text-[11px] text-[#859087]">Assigned rooms and current residents</p><div className="mt-5"><StudentTable students={students} onFee={id=>{const next=students.map((s:Student)=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s);setStudents(next);localStorage.setItem("hostel-students",JSON.stringify(next));}}/></div></div></>}
-      {active === "Fee payments" && <section className="overflow-hidden rounded-[18px] border border-[#e8ebe5] bg-white"><div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div><h3 className="text-[15px] font-bold">Fee payments</h3><p className="mt-1 text-[11px] text-[#859087]">Recurring residence fees · {period}</p></div><select value={period} onChange={e=>setPeriod(e.target.value)} className="w-fit rounded-xl border border-[#e4e9e2] bg-white px-3 py-2.5 text-[11px]"><option>Fall 2026</option><option>Spring 2027</option><option>Summer 2027</option></select></div><div className="grid gap-3 px-5 pb-5 sm:grid-cols-3 sm:px-6">{[{name:"Total expected",value:`$${students.length*850}`},{name:"Collected",value:`$${students.filter((s:Student)=>s.fee==="Paid").length*850}`},{name:"Outstanding",value:`$${students.filter((s:Student)=>s.fee==="Due").length*850}`}].map((x,i)=><div key={x.name} className="rounded-xl bg-[#f5f7f3] p-4"><p className="text-[10px] text-[#7d897f]">{x.name}</p><p className={`mt-2 text-xl font-bold ${i===2?"text-[#b47652]":"text-[#314538]"}`}>{x.value}</p></div>)}</div><StudentTable students={students} onFee={id=>{const next=students.map((s:Student)=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s);setStudents(next);localStorage.setItem("hostel-students",JSON.stringify(next));notify("Fee status updated");}} feeMode/></section>}
+      <section className="mt-5 overflow-hidden rounded-[18px] border border-[#e8ebe5] bg-white"><div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div><h3 className="text-[15px] font-bold tracking-tight">Recent residents</h3><p className="mt-1 text-[11px] text-[#859087]">Students with active room allocations</p></div><button onClick={() => setActive("Students")} className="text-left text-[11px] font-bold text-[#4c7757] hover:underline sm:text-right">View student directory →</button></div><StudentTable students={students.slice(0,4)} onFee={id=>setStudents(current=>current.map(s=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s))}/></section></>}
+      {active === "Students" && <section className="overflow-hidden rounded-[18px] border border-[#e8ebe5] bg-white"><div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div><h3 className="text-[15px] font-bold">Student directory</h3><p className="mt-1 text-[11px] text-[#859087]">{visibleStudents.length} residents · active room allocations</p></div><div className="flex flex-wrap gap-2"><div className="flex items-center gap-2 rounded-xl border border-[#e4e9e2] px-3"><Search size={14} className="text-[#8b978d]"/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search residents..." className="w-36 bg-transparent py-2.5 text-[11px] outline-none sm:w-48"/></div><select value={filter} onChange={e=>setFilter(e.target.value)} className="rounded-xl border border-[#e4e9e2] bg-white px-3 text-[11px] outline-none"><option>All students</option><option>Fees due</option>{hostels.map(h=><option key={h.name}>{h.name}</option>)}</select><button onClick={exportData} className="rounded-xl border border-[#e4e9e2] p-2.5"><Download size={15}/></button></div></div><StudentTable students={visibleStudents} onFee={id=>setStudents(current=>current.map(s=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s))}/></section>}
+      {active === "Hostels & rooms" && <><div className="mb-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">{hostels.map(h=><div key={h.name} className="rounded-[18px] border border-[#e8ebe5] bg-white p-5"><div className={`grid h-11 w-11 place-items-center rounded-[14px] ${h.color} text-sm font-bold text-white`}>{h.icon}</div><p className="mt-4 text-[14px] font-bold">{h.name}</p><p className="mt-1 text-[11px] text-[#879188]">{h.gender} · {h.total} beds</p><div className="mt-5 flex justify-between text-[11px]"><span className="text-[#78847b]">Occupied</span><b>{h.occupied} / {h.total}</b></div><div className="mt-2 h-2 rounded-full bg-[#edf0eb]"><div className="h-full rounded-full bg-[#78a078]" style={{width:`${h.occupied/h.total*100}%`}}/></div><p className="mt-3 text-[10px] font-semibold text-[#638268]">{h.total-h.occupied} beds available</p></div>)}</div><div className="rounded-[18px] border border-[#e8ebe5] bg-white p-5 sm:p-6"><h3 className="text-[15px] font-bold">Room allocation overview</h3><p className="mt-1 text-[11px] text-[#859087]">Assigned rooms and current residents</p><div className="mt-5"><StudentTable students={students} onFee={id=>setStudents(current=>current.map(s=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s))}/></div></div></>}
+      {active === "Fee payments" && <section className="overflow-hidden rounded-[18px] border border-[#e8ebe5] bg-white"><div className="flex flex-col gap-3 p-5 sm:flex-row sm:items-center sm:justify-between sm:px-6"><div><h3 className="text-[15px] font-bold">Fee payments</h3><p className="mt-1 text-[11px] text-[#859087]">Recurring residence fees · {period}</p></div><select value={period} onChange={e=>setPeriod(e.target.value)} className="w-fit rounded-xl border border-[#e4e9e2] bg-white px-3 py-2.5 text-[11px]"><option>Fall 2026</option><option>Spring 2027</option><option>Summer 2027</option></select></div><div className="grid gap-3 px-5 pb-5 sm:grid-cols-3 sm:px-6">{[{name:"Total expected",value:`$${students.length*850}`},{name:"Collected",value:`$${students.filter((s:Student)=>s.fee==="Paid").length*850}`},{name:"Outstanding",value:`$${students.filter((s:Student)=>s.fee==="Due").length*850}`}].map((x,i)=><div key={x.name} className="rounded-xl bg-[#f5f7f3] p-4"><p className="text-[10px] text-[#7d897f]">{x.name}</p><p className={`mt-2 text-xl font-bold ${i===2?"text-[#b47652]":"text-[#314538]"}`}>{x.value}</p></div>)}</div><StudentTable students={students} onFee={id=>setStudents(current=>current.map(s=>s.id===id?{...s,fee:s.fee==="Paid"?"Due":"Paid"}:s))} feeMode/></section>}
       {active === "Complaints" && <section className="rounded-[18px] border border-[#e8ebe5] bg-white"><div className="flex items-center justify-between p-5 sm:px-6"><div><h3 className="text-[15px] font-bold">Facility complaints</h3><p className="mt-1 text-[11px] text-[#859087]">Track and resolve student requests</p></div><button onClick={() => setModal("complaint")} className="flex items-center gap-2 rounded-xl bg-[#315e49] px-3.5 py-2.5 text-[11px] font-semibold text-white"><Plus size={14}/>New complaint</button></div><div className="space-y-3 px-5 pb-5 sm:px-6">{complaints.map(c=><div key={c.id} className="flex flex-col gap-3 rounded-[14px] border border-[#edf0eb] p-4 sm:flex-row sm:items-center"><div className={`grid h-10 w-10 shrink-0 place-items-center rounded-xl ${c.category==="Wi-Fi"?"bg-[#e8edf4] text-[#6b7f9b]":"bg-[#f5ece5] text-[#aa7958]"}`}>{c.category==="Wi-Fi"?<Wifi size={17}/>:<Wrench size={17}/>}</div><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><p className="text-[12px] font-bold">{c.category} · {c.room}</p><span className="text-[10px] text-[#97a098]">{c.id}</span><span className={`rounded-full px-2 py-1 text-[9px] font-bold ${c.status==="Open"?"bg-[#fbf0e3] text-[#a36d36]":"bg-[#e8f1e8] text-[#5c815e]"}`}>{c.status}</span></div><p className="mt-1 text-[11px] text-[#68756b]">{c.description}</p><p className="mt-1 text-[10px] text-[#929c93]">{c.name} · {c.date}</p></div><button onClick={()=>changeComplaint(c.id)} className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-[10px] font-semibold ${c.status==="Open"?"bg-[#e9f1e8] text-[#52754f]":"bg-[#f2f4f1] text-[#758078]"}`}>{c.status==="Open"?<><Check size={13}/>Mark resolved</>:"Reopen"}</button></div>)}</div></section>}
       <footer className="mt-8 flex flex-col justify-between gap-2 border-t border-[#e8ebe5] pt-5 text-[10px] text-[#98a198] sm:flex-row"><span>© 2026 Haven Campus Living · University Residence Services</span><span className="flex items-center gap-1.5"><span className="h-1.5 w-1.5 rounded-full bg-[#77a36e]"/>All systems operational</span></footer>
       </div>
@@ -66,4 +147,76 @@ export default function Index() {
 }
 const input = "w-full rounded-xl border border-[#e2e8df] bg-white px-3 py-2.5 text-xs outline-none transition focus:border-[#8eae8c] focus:ring-2 focus:ring-[#8eae8c]/15";
 function Field({label,children}:{label:string;children:React.ReactNode}){return <label className="block space-y-1.5"><span className="text-[10px] font-bold text-[#5f6d62]">{label}</span>{children}</label>}
-function StudentTable({students,onFee,feeMode=false}:{students:Student[];onFee:(id:string)=>void;feeMode?:boolean}){return <div className="overflow-x-auto"><table className="w-full min-w-[720px] text-left"><thead><tr className="border-y border-[#f0f2ee] bg-[#fbfcfa] text-[9px] font-bold uppercase tracking-[.12em] text-[#8a958c]"><th className="px-6 py-3">Student</th><th className="px-4 py-3">Department</th><th className="px-4 py-3">Room & hostel</th>{feeMode&&<th className="px-4 py-3">Fee period</th>}<th className="px-4 py-3">Fee status</th><th className="px-6 py-3 text-right">Action</th></tr></thead><tbody>{students.map(s=><tr key={s.id} className="border-b border-[#f1f3ef] last:border-0"><td className="px-6 py-3.5"><div className="flex items-center gap-3"><div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#e8eee5] text-[9px] font-bold text-[#52715a]">{s.initials}</div><div><p className="text-[11px] font-bold text-[#34443a]">{s.name}</p><p className="mt-0.5 text-[9px] text-[#99a199]">{s.id}</p></div></div></td><td className="px-4 py-3.5 text-[10px] text-[#6f7a71]">{s.department}</td><td className="px-4 py-3.5"><p className="text-[10px] font-semibold">{s.room}</p><p className="mt-0.5 text-[9px] text-[#98a098]">{s.hostel}</p></td>{feeMode&&<td className="px-4 py-3.5 text-[10px] text-[#6f7a71]">Fall 2026</td>}<td className="px-4 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[9px] font-bold ${s.fee==="Paid"?"bg-[#e9f2e8] text-[#5b805c]":"bg-[#fcf0e4] text-[#a37140]"}`}>{s.fee}</span></td><td className="px-6 py-3.5 text-right"><button onClick={()=>onFee(s.id)} className="text-[10px] font-semibold text-[#5e8062] hover:underline">{s.fee==="Paid"?"View record":"Record payment"}</button></td></tr>)}</tbody></table>{students.length===0&&<p className="p-8 text-center text-xs text-[#89948b]">No residents match your search.</p>}</div>}
+function StudentTable({students,onFee,feeMode=false}:{students:Student[];onFee:(id:string)=>void;feeMode?:boolean}) {
+  const [feeError, setFeeError] = useState("");
+  const recordPayment = async (student: Student) => {
+    const fee = student.fee === "Paid" ? "Due" : "Paid";
+    try {
+      await apiRequest("/api/data", {
+        method: "PATCH",
+        body: JSON.stringify({ type: "student", id: student.id, fee }),
+      });
+      setFeeError("");
+      onFee(student.id);
+    } catch (error) {
+      setFeeError(error instanceof Error ? error.message : "Unable to update fee status.");
+    }
+  };
+
+  return (
+    <div className="overflow-x-auto">
+      {feeError && <p role="alert" className="px-6 py-3 text-xs text-red-700">{feeError}</p>}
+      <table className="w-full min-w-[720px] text-left">
+        <thead>
+          <tr className="border-y border-[#f0f2ee] bg-[#fbfcfa] text-[9px] font-bold uppercase tracking-[.12em] text-[#8a958c]">
+            <th className="px-6 py-3">Student</th>
+            <th className="px-4 py-3">Department</th>
+            <th className="px-4 py-3">Room &amp; hostel</th>
+            {feeMode && <th className="px-4 py-3">Fee period</th>}
+            <th className="px-4 py-3">Fee status</th>
+            <th className="px-6 py-3 text-right">Action</th>
+          </tr>
+        </thead>
+        <tbody>
+          {students.map((student) => (
+            <tr key={student.id} className="border-b border-[#f1f3ef] last:border-0">
+              <td className="px-6 py-3.5">
+                <div className="flex items-center gap-3">
+                  <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[#e8eee5] text-[9px] font-bold text-[#52715a]">
+                    {student.initials}
+                  </div>
+                  <div>
+                    <p className="text-[11px] font-bold text-[#34443a]">{student.name}</p>
+                    <p className="mt-0.5 text-[9px] text-[#99a199]">{student.id}</p>
+                  </div>
+                </div>
+              </td>
+              <td className="px-4 py-3.5 text-[10px] text-[#6f7a71]">{student.department}</td>
+              <td className="px-4 py-3.5">
+                <p className="text-[10px] font-semibold">{student.room}</p>
+                <p className="mt-0.5 text-[9px] text-[#98a098]">{student.hostel}</p>
+              </td>
+              {feeMode && <td className="px-4 py-3.5 text-[10px] text-[#6f7a71]">Fall 2026</td>}
+              <td className="px-4 py-3.5">
+                <span className={`rounded-full px-2.5 py-1 text-[9px] font-bold ${student.fee === "Paid" ? "bg-[#e9f2e8] text-[#5b805c]" : "bg-[#fcf0e4] text-[#a37140]"}`}>
+                  {student.fee}
+                </span>
+              </td>
+              <td className="px-6 py-3.5 text-right">
+                <button
+                  onClick={() => void recordPayment(student)}
+                  className="text-[10px] font-semibold text-[#5e8062] hover:underline"
+                >
+                  {student.fee === "Paid" ? "View record" : "Record payment"}
+                </button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {students.length === 0 && (
+        <p className="p-8 text-center text-xs text-[#89948b]">No residents match your search.</p>
+      )}
+    </div>
+  );
+}
